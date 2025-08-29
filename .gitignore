@@ -5,3 +5,4 @@
 .idea/
 local.properties
 **/*.task
+output/app-debug.apk
