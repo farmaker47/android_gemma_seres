@@ -1,0 +1,21 @@
+docker build -t android-apk-builder --no-cache .
+
+docker run --rm -v $(pwd)/output:/app/output android-apk-builder
+
+# log megőrzés
+docker run --rm -v $(pwd)/output:/app/output android-apk-builder 2>&1 | tee log.txt
+
+
+# Új build
+docker run --rm -v "$(pwd):/app" -v "$(pwd)/models:/models" android-apk-builder bash -lc '
+  set -e
+  cd /app
+  /usr/local/bin/prepare_model.sh
+  [ -f gradlew ] || /opt/gradle-8.7/bin/gradle wrapper --gradle-version 8.7 --distribution-type bin --no-daemon
+  sed -i "s#^distributionUrl=.*#distributionUrl=https://services.gradle.org/distributions/gradle-8.7-bin.zip#" gradle/wrapper/gradle-wrapper.properties
+  chmod +x gradlew
+  ./gradlew --version
+  ./gradlew clean :app:assembleDebug --no-daemon
+  mkdir -p output && cp app/build/outputs/apk/debug/*.apk output/
+  echo "✅ APK kész: output/ alatt"
+'
