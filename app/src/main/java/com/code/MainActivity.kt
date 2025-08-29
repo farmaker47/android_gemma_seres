@@ -36,6 +36,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Logger.init(this)  // <- fontos
+        Logger.d("MainActivity onCreate")
 
         // Cím
         val title = TextView(this).apply {
@@ -141,28 +143,33 @@ class MainActivity : AppCompatActivity() {
         return outFile.absolutePath
     }
 
-private fun initLlm() {
-    try {
-        val dst = File(filesDir, MODEL_ASSET)
-        if (!dst.exists()) {
-            assets.open(MODEL_ASSET).use { input ->
-                FileOutputStream(dst).use { output -> input.copyTo(output) }
+    private fun initLlm() {
+        try {
+            Logger.d("LLM init kezdés...")
+            val dst = File(filesDir, MODEL_ASSET)
+            if (!dst.exists()) {
+                Logger.d("Model asset másolás a belső tárhelyre: $MODEL_ASSET")
+                assets.open(MODEL_ASSET).use { input ->
+                    FileOutputStream(dst).use { output -> input.copyTo(output) }
+                }
             }
+            val opts = LlmInferenceOptions.builder()
+                .setModelPath(dst.absolutePath)
+                .setMaxTokens(1024)
+                .build()
+            llm = LlmInference.createFromOptions(this, opts)
+            Logger.d("LLM sikeresen inicializálva: ${dst.absolutePath}")
+        } catch (e: Exception) {
+            Logger.e("LLM init hiba: ${e.message}")
+            addAssistantBubble("LLM init hiba: ${e.message}")
+            llm = null
         }
-        val opts = LlmInferenceOptions.builder()
-            .setModelPath(dst.absolutePath)
-            .setMaxTokens(1024)
-            .build()
-        llm = LlmInference.createFromOptions(this, opts)
-    } catch (e: Exception) {
-        addAssistantBubble("LLM init hiba: ${e.message}")
-        llm = null
     }
-}
-    
+
     private fun onSend() {
         val text = input.text?.toString()?.trim().orEmpty()
         if (text.isEmpty()) return
+        Logger.d("Felhasználói input: $text")
 
         addUserBubble(text)
         input.setText("")
@@ -171,33 +178,34 @@ private fun initLlm() {
 
     private fun generate(userQuestion: String) {
         if (userQuestion.isBlank()) return
+        Logger.d("Generate start for: $userQuestion")
 
-        // 1) Prompt összeállítás
         val prompt = buildString {
             appendLine("Válaszolj tömören és magyarul.")
-            append("Kérdés: ")
-            appendLine(userQuestion)
+            append("Kérdés: "); appendLine(userQuestion)
         }
+        Logger.d("Prompt: $prompt")
 
-        // 2) „Gondolkodom…” buborék
         addAssistantBubble("Gondolkodom…")
-
-        // 3) LLM példány ellenőrzése
         val engine = llm ?: run {
+            Logger.e("LLM nem inicializált")
             replaceLastThinkingIfAny("Hiba: LLM nem inicializált.")
             return
         }
 
-        // 4) Coroutine indítás (Main), LLM hívás IO szálon
         lifecycleScope.launch {
+            val start = System.currentTimeMillis()
             val reply = withContext(Dispatchers.IO) {
                 try {
-                    engine.generateResponse(prompt)
+                    engine.generateResponse(prompt).also {
+                        val took = System.currentTimeMillis() - start
+                        Logger.d("LLM válasz: $it (idő: ${took}ms)")
+                    }
                 } catch (e: Exception) {
+                    Logger.e("LLM hiba: ${e.message}", e)
                     "Hiba történt: ${e.message ?: "ismeretlen hiba"}"
                 }
             }
-            // 5) UI frissítés a fő szálon
             replaceLastThinkingIfAny(reply)
         }
     }

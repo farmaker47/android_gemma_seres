@@ -4,5 +4,4 @@
 **/.cxx/
 .idea/
 local.properties
-
-
+**/*.task
