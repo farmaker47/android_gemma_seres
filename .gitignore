@@ -6,3 +6,5 @@
 local.properties
 **/*.task
 output/app-debug.apk
+app/src/main/assets/gemma3-270m-it-q8.task
+models/gemma3-270m_q8_ekv4096.task
