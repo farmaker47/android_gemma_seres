@@ -17,14 +17,15 @@ import androidx.core.view.setPadding
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
+import com.google.mediapipe.tasks.genai.llminference.LlmInference.Backend
 import com.google.mediapipe.tasks.genai.llminference.LlmInference.LlmInferenceOptions
 
 class MainActivity : AppCompatActivity() {
 
     private val MODEL_ASSET = "gemma3-270m-it-q8.task"
+    private val MAX_TOKENS = 1024
 
     private var llm: LlmInference? = null
 
@@ -147,15 +148,16 @@ class MainActivity : AppCompatActivity() {
         try {
             Logger.d("LLM init kezdés...")
             val dst = File(filesDir, MODEL_ASSET)
-            if (!dst.exists()) {
-                Logger.d("Model asset másolás a belső tárhelyre: $MODEL_ASSET")
-                assets.open(MODEL_ASSET).use { input ->
-                    FileOutputStream(dst).use { output -> input.copyTo(output) }
-                }
-            }
+//            if (!dst.exists()) {
+//                Logger.d("Model asset másolás a belső tárhelyre: $MODEL_ASSET")
+//                assets.open(MODEL_ASSET).use { input ->
+//                    FileOutputStream(dst).use { output -> input.copyTo(output) }
+//                }
+//            }
             val opts = LlmInferenceOptions.builder()
-                .setModelPath(dst.absolutePath)
-                .setMaxTokens(1024)
+                .setModelPath("/data/local/tmp/gemma3-270m_q8_ekv12801.task")
+                .setPreferredBackend(Backend.CPU)
+                .setMaxTokens(MAX_TOKENS)
                 .build()
             llm = LlmInference.createFromOptions(this, opts)
             Logger.d("LLM sikeresen inicializálva: ${dst.absolutePath}")
@@ -186,36 +188,39 @@ class MainActivity : AppCompatActivity() {
         }
         Logger.d("Prompt: $prompt")
 
-        addAssistantBubble("Gondolkodom…")
+        addAssistantBubble("Gondolkodom…", inProgress = true)
+
         val engine = llm ?: run {
             Logger.e("LLM nem inicializált")
-            replaceLastThinkingIfAny("Hiba: LLM nem inicializált.")
+            replaceLastThinkingIfAny("Hiba: LLM nem inicializált.", done = true)
             return
         }
 
-        lifecycleScope.launch {
-            val start = System.currentTimeMillis()
-            val reply = withContext(Dispatchers.IO) {
-                try {
-                    engine.generateResponse(prompt).also {
-                        val took = System.currentTimeMillis() - start
-                        Logger.d("LLM válasz: $it (idő: ${took}ms)")
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                engine.generateResponseAsync(prompt.take(MAX_TOKENS)) { partialResult, done ->
+                    runOnUiThread {
+                        replaceLastThinkingIfAny(partialResult, done)
                     }
-                } catch (e: Exception) {
-                    Logger.e("LLM hiba: ${e.message}", e)
-                    "Hiba történt: ${e.message ?: "ismeretlen hiba"}"
                 }
+            } catch (e: Exception) {
+                Logger.e("LLM hiba: ${e.message}", e)
+                replaceLastThinkingIfAny(
+                    "Hiba történt: ${e.message ?: "ismeretlen hiba"}",
+                    done = true
+                )
             }
-            replaceLastThinkingIfAny(reply)
         }
     }
 
     // ——— Buborékkészítés ———
 
     private fun addUserBubble(text: String) = addBubble(text, isUser = true)
-    private fun addAssistantBubble(text: String) = addBubble(text, isUser = false)
 
-    private fun addBubble(text: String, isUser: Boolean) {
+    private fun addAssistantBubble(text: String, inProgress: Boolean = false) =
+        addBubble(text, isUser = false, inProgress = inProgress)
+
+    private fun addBubble(text: String, isUser: Boolean, inProgress: Boolean = false) {
         val bubble = TextView(this).apply {
             this.text = text
             textSize = 16f
@@ -224,6 +229,9 @@ class MainActivity : AppCompatActivity() {
             val fill = if (isUser) 0xFFE3F2FD.toInt() else 0xFFF1F3F4.toInt()
             val stroke = if (isUser) 0xFF90CAF9.toInt() else 0xFFE0E0E0.toInt()
             background = roundedBg(radius = 24f, fill = fill, stroke = stroke)
+            if (!isUser && inProgress) {
+                tag = "in-progress"
+            }
         }
 
         val row = LinearLayout(this).apply {
@@ -243,17 +251,23 @@ class MainActivity : AppCompatActivity() {
         scrollToBottom()
     }
 
-    // Ha az utolsó asszisztens-buborék „Gondolkodom…”, cseréljük le a tényleges válaszra,
-    // különben adjunk hozzá egy új asszisztens buborékot.
-    private fun replaceLastThinkingIfAny(answer: String) {
+    private fun replaceLastThinkingIfAny(answer: String, done: Boolean) {
         val count = messages.childCount
         if (count == 0) {
-            addAssistantBubble(answer); return
+            addAssistantBubble(answer)
+            return
         }
         val lastRow = messages.getChildAt(count - 1) as? LinearLayout
         val maybeBubble = lastRow?.getChildAt(0) as? TextView
-        if (maybeBubble != null && maybeBubble.text.toString().trim() == "Gondolkodom…") {
-            maybeBubble.text = answer
+        if (maybeBubble != null && maybeBubble.tag == "in-progress") {
+            if (maybeBubble.text.toString().trim() == "Gondolkodom…") {
+                maybeBubble.text = answer
+            } else {
+                maybeBubble.text = maybeBubble.text.toString() + answer
+            }
+            if (done) {
+                maybeBubble.tag = null
+            }
         } else {
             addAssistantBubble(answer)
         }
@@ -280,4 +294,3 @@ class MainActivity : AppCompatActivity() {
         llm = null
     }
 }
-
